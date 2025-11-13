@@ -21,7 +21,7 @@ svg{
     min-height: 80vh;
     flex-direction: column;
     background-color: rgba(22, 23, 29, 0.95);
-    color: aliceblue;
+    color: rgb(255, 255, 255);
     max-width: 550px;
     margin: 0 auto;
     border-radius: 1rem;
