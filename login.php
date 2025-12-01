@@ -31,7 +31,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Přihlášení</title>
+    <title>Školní přihlášení</title>
     <link rel="stylesheet" href="style/style.css">
 </head>
 <body>
@@ -40,7 +40,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="form">
                 <div class="form-header">
                     <img src="/img/apexlogo.png" alt="Logo">
-                    <h2>Přihlášení</h2>
+                    <h2>Školní přihlášení</h2>
+                    <p style="margin-top:8px;font-size:0.9rem;color:#6b7280;">
+                        Přihlas se svým školním účtem a pokračuj do svého profilu.
+                    </p>
                 </div>
 
                 <?php if (isset($error)): ?>

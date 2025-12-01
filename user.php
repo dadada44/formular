@@ -18,7 +18,39 @@ mysqli_stmt_bind_result($stmt, $username, $email, $avatar);
 mysqli_stmt_fetch($stmt);
 mysqli_stmt_close($stmt);
 
-// === 2. NAHRÁVÁNÍ VLASTNÍHO AVATARU ===
+// Cesta k avataru (fallback na výchozí, pokud není nastaveno nebo soubor chybí)
+$avatarFile = $avatar ?: 'default.png';
+$avatar_path = 'img/avatars/' . $avatarFile;
+if (!file_exists($avatar_path)) {
+    // Když neexistuje avatar ve složce, použij logo jako náhradu
+    $avatar_path = 'img/apexlogo.png';
+}
+
+// === 2. ZMĚNA AVATARU – PŘEDDEFINOVANÝ VÝBĚR ZE SLOŽKY ===
+if (isset($_POST['choose_avatar']) && isset($_POST['avatar_name'])) {
+    $chosen = basename($_POST['avatar_name']); // ochrana před ../
+    $uploadDir = 'img/avatars/';
+    $targetPath = $uploadDir . $chosen;
+
+    if (file_exists($targetPath)) {
+        // Smazat starý avatar pokud byl vlastní (a není logo / default)
+        if ($avatar && $avatar !== 'default.png' && $avatar !== $chosen && file_exists($uploadDir . $avatar)) {
+            @unlink($uploadDir . $avatar);
+        }
+
+        $stmt = mysqli_prepare($conn, "UPDATE users SET avatar = ? WHERE id = ?");
+        mysqli_stmt_bind_param($stmt, "si", $chosen, $user_id);
+        mysqli_stmt_execute($stmt);
+
+        $avatar = $chosen;
+        $avatar_path = $targetPath;
+        $success = "Avatar byl změněn.";
+    } else {
+        $error = "Zvolený avatar nebyl nalezen.";
+    }
+}
+
+// === 3. NAHRÁVÁNÍ VLASTNÍHO AVATARU Z DISKU ===
 if (isset($_POST['upload_new_avatar']) && isset($_FILES['upload_avatar']) && $_FILES['upload_avatar']['error'] === UPLOAD_ERR_OK) {
 
     $file = $_FILES['upload_avatar'];
@@ -47,7 +79,7 @@ if (isset($_POST['upload_new_avatar']) && isset($_FILES['upload_avatar']) && $_F
         if (move_uploaded_file($file['tmp_name'], $targetPath)) {
 
             // Smazat starý avatar (pokud není defaultní)
-            if ($avatar !== "default.png" && file_exists($uploadDir . $avatar)) {
+            if ($avatar && $avatar !== "default.png" && file_exists($uploadDir . $avatar)) {
                 @unlink($uploadDir . $avatar);
             }
 
@@ -58,7 +90,7 @@ if (isset($_POST['upload_new_avatar']) && isset($_FILES['upload_avatar']) && $_F
 
             // Aktualizace hodnot pro stránku
             $avatar = $newFile;
-            $avatar_path = $uploadDir . $newFile;
+            $avatar_path = $targetPath;
 
             $success = "Avatar byl úspěšně nahrán!";
         } else {
@@ -74,17 +106,26 @@ if (isset($_POST['update_profile'])) {
 
     if (!preg_match('/^[a-zA-Z0-9]+$/', $new_username)) {
         $error = "Přezdívka smí obsahovat jen písmena a čísla!";
-    } elseif (mysqli_fetch_row(mysqli_query($conn, "SELECT 1 FROM users WHERE username = '$new_username' AND id != $user_id"))) {
-        $error = "Tato přezdívka je už zabraná!";
     } else {
-        $stmt = mysqli_prepare($conn, "UPDATE users SET username = ?, email = ? WHERE id = ?");
-        mysqli_stmt_bind_param($stmt, "ssi", $new_username, $new_email, $user_id);
-        mysqli_stmt_execute($stmt);
+        // Bezpečná kontrola duplicity pomocí prepared statement
+        $check = mysqli_prepare($conn, "SELECT id FROM users WHERE username = ? AND id != ?");
+        mysqli_stmt_bind_param($check, "si", $new_username, $user_id);
+        mysqli_stmt_execute($check);
+        mysqli_stmt_store_result($check);
 
-        $_SESSION['username'] = $new_username;
-        $username = $new_username;
-        $email = $new_email;
-        $success = "Profil byl aktualizován!";
+        if (mysqli_stmt_num_rows($check) > 0) {
+            $error = "Tato přezdívka je už zabraná!";
+        } else {
+            $stmt = mysqli_prepare($conn, "UPDATE users SET username = ?, email = ? WHERE id = ?");
+            mysqli_stmt_bind_param($stmt, "ssi", $new_username, $new_email, $user_id);
+            mysqli_stmt_execute($stmt);
+
+            $_SESSION['username'] = $new_username;
+            $username = $new_username;
+            $email = $new_email;
+            $success = "Profil byl aktualizován!";
+        }
+        mysqli_stmt_close($check);
     }
 }
 
@@ -121,7 +162,7 @@ if (isset($_POST['change_password'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Profil | Apex Inventory</title>
+    <title>Školní profil</title>
     <link rel="stylesheet" href="style/style.css">
 </head>
 <body class="user-page">
@@ -129,8 +170,11 @@ if (isset($_POST['change_password'])) {
         <section>
             <div class="form">
                 <div class="form-header">
-                    <img src="/img/apexlogo.png" alt="Logo" style="width:90px;">
-                    <h2>Vítej, <span style="color:#ff00e1;"><?= htmlspecialchars($username) ?></span>!</h2>
+                    <img src="/img/apexlogo.png" alt="Logo" style="width:80px;">
+                    <h2>Školní profil</h2>
+                    <p style="margin-top:6px;font-size:0.9rem;color:#6b7280;">
+                        Přihlášen jako <strong><?= htmlspecialchars($username) ?></strong>.
+                    </p>
                 </div>
 
                 <?php if ($error): ?>
@@ -140,16 +184,52 @@ if (isset($_POST['change_password'])) {
                     <div class="msg success"><?= htmlspecialchars($success) ?></div>
                 <?php endif; ?>
 
-                <!-- Mini dashboard -->
+                <!-- Přehled účtu -->
                 <div class="dashboard">
-                    <div class="card"><h3>Status</h3><p style="color:#4caf50;font-size:1.4rem;">Aktivní</p></div>
-                    <div class="card"><h3>E-mail</h3><p><?= $email ? htmlspecialchars($email) : "<em>není vyplněn</em>" ?></p></div>
+                    <div class="card">
+                        <h3 style="font-size:0.9rem;color:#6b7280;margin-bottom:4px;">Stav účtu</h3>
+                        <p style="color:#16a34a;font-size:1rem;font-weight:600;">Aktivní žák</p>
+                    </div>
+                    <div class="card">
+                        <h3 style="font-size:0.9rem;color:#6b7280;margin-bottom:4px;">E‑mail pro školu</h3>
+                        <p style="font-size:0.95rem;">
+                            <?= $email ? htmlspecialchars($email) : "<em>není vyplněn</em>" ?>
+                        </p>
+                    </div>
                 </div>
 
                 <!-- VÝBĚR + NAHRÁVÁNÍ AVATARU -->
                 <div class="section text-center">
                     <h3 class="section-title">Tvůj aktuální avatar</h3>
-                    <img src="<?= $avatar_path ?>?v=<?= time() ?>" alt="Aktuální avatar" class="avatar-img">
+                    <img src="<?= htmlspecialchars($avatar_path) ?>?v=<?= time() ?>" alt="Aktuální avatar" class="avatar-img">
+
+                    <!-- PŘEDDEFINOVANÉ AVATARY ZE SLOŽKY -->
+                    <div class="mt-5">
+                        <h4 class="section-subtitle">Vyber si z galerie</h4>
+                        <div class="avatar-grid">
+                            <?php
+                            $avatarDirPath = __DIR__ . '/img/avatars';
+                            if (is_dir($avatarDirPath)) {
+                                $files = scandir($avatarDirPath);
+                                $allowedExt = ['png','jpg','jpeg','gif','webp'];
+                                foreach ($files as $fileName) {
+                                    if ($fileName === '.' || $fileName === '..') continue;
+                                    $ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+                                    if (!in_array($ext, $allowedExt)) continue;
+                                    $isActive = ($avatar === $fileName);
+                                    ?>
+                                    <form method="POST" class="avatar-option<?= $isActive ? ' avatar-option--active' : '' ?>">
+                                        <input type="hidden" name="avatar_name" value="<?= htmlspecialchars($fileName) ?>">
+                                        <button type="submit" name="choose_avatar">
+                                            <img src="img/avatars/<?= htmlspecialchars($fileName) ?>" alt="Avatar <?= htmlspecialchars($fileName) ?>">
+                                        </button>
+                                    </form>
+                                    <?php
+                                }
+                            }
+                            ?>
+                        </div>
+                    </div>
 
                     <!-- NAHRÁVÁNÍ VLASTNÍHO AVATARU -->
                     <div class="upload-section mt-5">
@@ -168,28 +248,32 @@ if (isset($_POST['change_password'])) {
 
                 <!-- Upravit profil -->
                 <div class="section">
-                    <h3 style="color:#ff00e1;">Upravit přezdívku a e-mail</h3>
+                    <h3 style="font-size:1rem;color:#111827;margin-bottom:10px;">Osobní údaje</h3>
                     <form method="POST">
-                        <div class="form-main-inputs"><input type="text" name="username" value="<?= htmlspecialchars($username) ?>" required pattern="[a-zA-Z0-9]+"></div>
-                        <div class="form-main-inputs"><input type="email" name="email" value="<?= htmlspecialchars($email ?? '') ?>" placeholder="tvuj@email.cz"></div>
+                        <div class="form-main-inputs">
+                            <input type="text" name="username" value="<?= htmlspecialchars($username) ?>" required pattern="[a-zA-Z0-9]+" placeholder="Školní přezdívka">
+                        </div>
+                        <div class="form-main-inputs">
+                            <input type="email" name="email" value="<?= htmlspecialchars($email ?? '') ?>" placeholder="školní e‑mail (volitelné)">
+                        </div>
                         <button type="submit" name="update_profile">Uložit změny</button>
                     </form>
                 </div>
 
                 <!-- Změna hesla -->
                 <div class="section">
-                    <h3 style="color:#ff00e1;">Změnit heslo</h3>
+                    <h3 style="font-size:1rem;color:#111827;margin-bottom:10px;">Heslo k účtu</h3>
                     <form method="POST">
                         <div class="form-main-inputs"><input type="password" name="old_password" placeholder="Staré heslo" required></div>
-                        <div class="form-main-inputs"><input type="password" name="new_password" placeholder="Nové heslo (min. 6)" required minlength="6"></div>
+                        <div class="form-main-inputs"><input type="password" name="new_password" placeholder="Nové heslo (min. 6 znaků)" required minlength="6"></div>
                         <div class="form-main-inputs"><input type="password" name="new_password_confirm" placeholder="Zopakovat nové heslo" required></div>
-                        <button type="submit" name="change_password" style="background:#f25a5a;">Změnit heslo</button>
+                        <button type="submit" name="change_password">Změnit heslo</button>
                     </form>
                 </div>
 
-                <div style="text-align:center; margin:40px 0;">
-                    <a href="logout.php" style="background:#932929; color:white; padding:14px 32px; border-radius:8px; text-decoration:none; font-weight:600;">
-                        Odhlásit se
+                <div style="text-align:center; margin:24px 0 8px;">
+                    <a href="logout.php">
+                        Odhlásit se ze školního účtu
                     </a>
                 </div>
             </div>

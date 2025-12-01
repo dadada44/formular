@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Registrace</title>
+    <title>Vytvořit školní účet</title>
     <link rel="stylesheet" href="style/style.css">
 </head>
 <body>
@@ -13,7 +13,10 @@
             <div class="form">
                 <div class="form-header">
                     <img src="/img/apexlogo.png" alt="Logo">
-                    <h2>Vytvořit účet</h2>
+                    <h2>Vytvořit školní účet</h2>
+                    <p style="margin-top:8px;font-size:0.9rem;color:#6b7280;">
+                        Registrace pro žáky. Zvol si přezdívku, kterou si snadno zapamatuješ.
+                    </p>
                 </div>
 
                 <?php
