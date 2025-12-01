@@ -10,7 +10,7 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 $error = $success = "";
 
-// Načtení uživatele
+// === 1. NAČTI UŽIVATELE Z DB (nejdřív!) ===
 $stmt = mysqli_prepare($conn, "SELECT username, email, avatar FROM users WHERE id = ?");
 mysqli_stmt_bind_param($stmt, "i", $user_id);
 mysqli_stmt_execute($stmt);
@@ -18,59 +18,77 @@ mysqli_stmt_bind_result($stmt, $username, $email, $avatar);
 mysqli_stmt_fetch($stmt);
 mysqli_stmt_close($stmt);
 
-// Výchozí avatar, pokud není nastaven
-if (!$avatar || !file_exists("img/avatars/$avatar")) {
-    $avatar = "default.png"; // musí být v img/avatars/
-}
+// === 2. NAHRÁVÁNÍ VLASTNÍHO AVATARU ===
+if (isset($_POST['upload_new_avatar']) && isset($_FILES['upload_avatar']) && $_FILES['upload_avatar']['error'] === UPLOAD_ERR_OK) {
 
-$avatar_path = "img/avatars/" . $avatar;
+    $file = $_FILES['upload_avatar'];
+    $uploadDir = 'img/avatars/';
+    $maxSize = 5 * 1024 * 1024; // 5 MB
 
-// === VÝBĚR AVATARU Z GALERIE ===
-if (isset($_POST['change_avatar']) && !empty($_POST['selected_avatar'])) {
-    $new_avatar = basename($_POST['selected_avatar']);
-    $allowed = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
-    $ext = strtolower(pathinfo($new_avatar, PATHINFO_EXTENSION));
+    // Povolené typy obrázků
+    $allowedExt = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
+    $allowedMime = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+    
+    // Mime type pro bezpečnost
+    $fileMime = mime_content_type($file['tmp_name']);
+    $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
 
-    if (in_array($ext, $allowed) && file_exists("img/avatars/$new_avatar")) {
-        $stmt = mysqli_prepare($conn, "UPDATE users SET avatar = ? WHERE id = ?");
-        mysqli_stmt_bind_param($stmt, "si", $new_avatar, $user_id);
-        mysqli_stmt_execute($stmt);
-        $avatar = $new_avatar;
-        $avatar_path = "img/avatars/$new_avatar";
-        $success = "Avatar byl úspěšně změněn!";
+    // Validace
+    if (!in_array($fileMime, $allowedMime) || !in_array($ext, $allowedExt)) {
+        $error = "Neplatný formát souboru!";
+    } elseif ($file['size'] > $maxSize) {
+        $error = "Soubor je příliš velký (max 5MB)!";
     } else {
-        $error = "Neplatný avatar!";
+        // Vygeneruj unikátní název
+        $newFile = $user_id . "_" . time() . "." . $ext;
+        $targetPath = $uploadDir . $newFile;
+
+        // Přesun souboru
+        if (move_uploaded_file($file['tmp_name'], $targetPath)) {
+
+            // Smazat starý avatar (pokud není defaultní)
+            if ($avatar !== "default.png" && file_exists($uploadDir . $avatar)) {
+                @unlink($uploadDir . $avatar);
+            }
+
+            // Uložit do databáze nový soubor
+            $stmt = mysqli_prepare($conn, "UPDATE users SET avatar = ? WHERE id = ?");
+            mysqli_stmt_bind_param($stmt, "si", $newFile, $user_id);
+            mysqli_stmt_execute($stmt);
+
+            // Aktualizace hodnot pro stránku
+            $avatar = $newFile;
+            $avatar_path = $uploadDir . $newFile;
+
+            $success = "Avatar byl úspěšně nahrán!";
+        } else {
+            $error = "Nepodařilo se uložit soubor!";
+        }
     }
 }
 
-// === ZMĚNA PŘEZDÍVKY + E-MAILU ===
+// === 4. ZMĚNA PŘEZDÍVKY + E-MAILU ===
 if (isset($_POST['update_profile'])) {
     $new_username = trim($_POST['username']);
     $new_email = trim($_POST['email'] ?? '');
 
     if (!preg_match('/^[a-zA-Z0-9]+$/', $new_username)) {
         $error = "Přezdívka smí obsahovat jen písmena a čísla!";
+    } elseif (mysqli_fetch_row(mysqli_query($conn, "SELECT 1 FROM users WHERE username = '$new_username' AND id != $user_id"))) {
+        $error = "Tato přezdívka je už zabraná!";
     } else {
-        $check = mysqli_prepare($conn, "SELECT id FROM users WHERE username = ? AND id != ?");
-        mysqli_stmt_bind_param($check, "si", $new_username, $user_id);
-        mysqli_stmt_execute($check);
-        mysqli_stmt_store_result($check);
+        $stmt = mysqli_prepare($conn, "UPDATE users SET username = ?, email = ? WHERE id = ?");
+        mysqli_stmt_bind_param($stmt, "ssi", $new_username, $new_email, $user_id);
+        mysqli_stmt_execute($stmt);
 
-        if (mysqli_stmt_num_rows($check) > 0) {
-            $error = "Tato přezdívka je už zabraná!";
-        } else {
-            $stmt = mysqli_prepare($conn, "UPDATE users SET username = ?, email = ? WHERE id = ?");
-            mysqli_stmt_bind_param($stmt, "ssi", $new_username, $new_email, $user_id);
-            mysqli_stmt_execute($stmt);
-            $_SESSION['username'] = $new_username;
-            $username = $new_username;
-            $email = $new_email;
-            $success = "Profil byl aktualizován!";
-        }
+        $_SESSION['username'] = $new_username;
+        $username = $new_username;
+        $email = $new_email;
+        $success = "Profil byl aktualizován!";
     }
 }
 
-// === ZMĚNA HESLA ===
+// === 5. ZMĚNA HESLA ===
 if (isset($_POST['change_password'])) {
     $old = $_POST['old_password'];
     $new1 = $_POST['new_password'];
@@ -81,7 +99,6 @@ if (isset($_POST['change_password'])) {
     mysqli_stmt_execute($stmt);
     mysqli_stmt_bind_result($stmt, $hash);
     mysqli_stmt_fetch($stmt);
-    mysqli_stmt_close($stmt);
 
     if (!password_verify($old, $hash)) {
         $error = "Staré heslo je špatné!";
@@ -106,38 +123,11 @@ if (isset($_POST['change_password'])) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Profil | Apex Inventory</title>
     <link rel="stylesheet" href="style/style.css">
-    <style>
-        .avatar-img { width: 140px; height: 140px; border-radius: 50%; object-fit: cover; border: 5px solid #ff00e1; box-shadow: 0 0 25px rgba(255,0,225,0.5); transition: .3s; }
-        .avatar-grid { 
-            display: grid; 
-            grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); 
-            gap: 15px; 
-            padding: 15px; 
-            background: #222; 
-            border-radius: 12px; 
-            border: 1px solid #434355; 
-            max-height: 420px; 
-            overflow-y: auto; 
-        }
-        .avatar-option img { 
-            width: 100%; 
-            height: 100px; 
-            object-fit: cover; 
-            border-radius: 12px; 
-            transition: all .3s; 
-            cursor: pointer; 
-        }
-        .avatar-option img:hover { transform: scale(1.1); box-shadow: 0 0 20px #ff00e1; }
-        .avatar-option button { background:none; border:none; padding:0; }
-        .section { background:#2a2b35; padding:25px; border-radius:12px; margin:20px 0; border:1px solid #434355; }
-        .dashboard { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:20px; margin:30px 0; }
-        .card { background:#2a2b35; padding:25px; border-radius:12px; text-align:center; border:1px solid #434355; }
-    </style>
 </head>
-<body>
+<body class="user-page">
     <main>
         <section>
-            <div class="form" style="max-width:950px;">
+            <div class="form">
                 <div class="form-header">
                     <img src="/img/apexlogo.png" alt="Logo" style="width:90px;">
                     <h2>Vítej, <span style="color:#ff00e1;"><?= htmlspecialchars($username) ?></span>!</h2>
@@ -156,35 +146,23 @@ if (isset($_POST['change_password'])) {
                     <div class="card"><h3>E-mail</h3><p><?= $email ? htmlspecialchars($email) : "<em>není vyplněn</em>" ?></p></div>
                 </div>
 
-                <!-- VÝBĚR AVATARU Z GALERIE -->
-                <div class="section" style="text-align:center;">
-                    <h3 style="color:#ff00e1; margin-bottom:20px;">Tvůj aktuální avatar</h3>
-                    <img src="<?= $avatar_path ?>?v=<?= time() ?>" alt="Avatar" class="avatar-img">
+                <!-- VÝBĚR + NAHRÁVÁNÍ AVATARU -->
+                <div class="section text-center">
+                    <h3 class="section-title">Tvůj aktuální avatar</h3>
+                    <img src="<?= $avatar_path ?>?v=<?= time() ?>" alt="Aktuální avatar" class="avatar-img">
 
-                    <h3 style="margin:30px 0 15px; color:#ff00e1;">Vyber nový avatar</h3>
-                    <div class="avatar-grid">
-                        <?php
-                        $folder = 'img/avatars/';
-                        $files = scandir($folder);
-                        $allowed = ['png','jpg','jpeg','gif','webp'];
-
-                        foreach ($files as $file) {
-                            if ($file === '.' || $file === '..') continue;
-                            $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-                            if (in_array($ext, $allowed)) {
-                                $active = ($file === $avatar) ? 'border:4px solid #ff00e1; box-shadow:0 0 20px #ff00e1;' : '';
-                                echo '
-                                <div class="avatar-option">
-                                    <form method="POST">
-                                        <input type="hidden" name="selected_avatar" value="'.$file.'">
-                                        <button type="submit" name="change_avatar">
-                                            <img src="img/avatars/'.$file.'" alt="'.$file.'" style="'.$active.'">
-                                        </button>
-                                    </form>
-                                </div>';
-                            }
-                        }
-                        ?>
+                    <!-- NAHRÁVÁNÍ VLASTNÍHO AVATARU -->
+                    <div class="upload-section mt-5">
+                        <form method="POST" enctype="multipart/form-data" class="upload-form">
+                            <label for="upload_avatar" class="upload-label">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                                </svg>
+                                Nahrát vlastní avatar
+                            </label>
+                            <input type="file" name="upload_avatar" id="upload_avatar" accept="image/*" required>
+                            <button type="submit" name="upload_new_avatar" class="btn-primary mt-3">Nahrát a použít</button>
+                        </form>
                     </div>
                 </div>
 
